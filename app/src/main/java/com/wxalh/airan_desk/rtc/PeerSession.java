@@ -31,6 +31,11 @@ final class PeerSession {
     volatile boolean stopped;
     String lastRemoteDescriptionType = "";
     String lastRemoteDescriptionSdp = "";
+    String localOfferFirstVideoCodec = "";
+    String localAnswerVideoCodec = "";
+    String remoteOfferFirstVideoCodec = "";
+    String remoteAnswerVideoCodec = "";
+    String negotiatedVideoCodec = "";
     volatile boolean peerConnected;
     final List<IceCandidate> pendingCandidates = new ArrayList<IceCandidate>();
     String pendingRemoteFileListPath = "";
@@ -98,12 +103,9 @@ final class PeerSession {
     double inboundLossRateVar;
     double inboundDecodeGapEwma;
     double inboundDecodeGapVar;
-    long lastVideoAdaptFeedbackMs;
     int baseCaptureFps;
-    String baseBitrateProfile = "";
     int videoAdaptLevel;
     int stableVideoFeedbacks;
-    long lastVideoAdaptApplyMs;
     double feedbackArrivalKbpsEwma;
     double feedbackArrivalKbpsVar;
     double feedbackJitterMsEwma;
@@ -120,11 +122,9 @@ final class PeerSession {
     long lastOutboundVideoHugeFrames;
     long lastOutboundVideoWidth;
     long lastOutboundVideoHeight;
-    long lastOutboundVideoAdaptMs;
     long lastOutboundResolutionRestoreMs;
     boolean controlHeartbeatRunning;
     long lastKeyframeRequestMs;
-    long keyframeRequestBackoffMs = 6000L;
     final Runnable statsPollRunnable = new Runnable(){
 
         @Override

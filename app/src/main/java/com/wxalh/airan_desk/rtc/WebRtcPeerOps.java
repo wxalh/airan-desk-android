@@ -182,8 +182,6 @@ extends WebRtcInputOps {
         rtcConfig.sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN;
         rtcConfig.enableCpuOveruseDetection = false;
         rtcConfig.suspendBelowMinBitrate = false;
-        rtcConfig.screencastMinBitrate = Integer.valueOf(SCREENCAST_MIN_BITRATE_BPS);
-        rtcConfig.combinedAudioVideoBwe = Boolean.TRUE;
         if ("turn_udp".equals(networkPath) || "turn_tcp".equals(networkPath)) {
             rtcConfig.iceTransportsType = PeerConnection.IceTransportsType.RELAY;
         }
@@ -343,10 +341,12 @@ extends WebRtcInputOps {
                 for (RtpTransceiver transceiver : transceivers) {
                     if (transceiver == null || transceiver.getMediaType() != MediaStreamTrack.MediaType.MEDIA_TYPE_VIDEO) continue;
                     transceiver.setDirection(RtpTransceiver.RtpTransceiverDirection.RECV_ONLY);
+                    WebRtcClient.applyHardwareFirstVideoCodecPreferences(transceiver, false);
                     return;
                 }
             }
-            session.peer.addTransceiver(MediaStreamTrack.MediaType.MEDIA_TYPE_VIDEO, new RtpTransceiver.RtpTransceiverInit(RtpTransceiver.RtpTransceiverDirection.RECV_ONLY));
+            RtpTransceiver transceiver = session.peer.addTransceiver(MediaStreamTrack.MediaType.MEDIA_TYPE_VIDEO, new RtpTransceiver.RtpTransceiverInit(RtpTransceiver.RtpTransceiverDirection.RECV_ONLY));
+            WebRtcClient.applyHardwareFirstVideoCodecPreferences(transceiver, false);
             WebRtcClient.status("Control video transceiver prepared: recvonly");
         }
         catch (Exception e) {
@@ -550,6 +550,7 @@ extends WebRtcInputOps {
             WebRtcClient.applySharedCaptureRectToSession(session);
             session.localVideoTrack = factory.createVideoTrack("video_airan", sharedVideoSource);
             RtpTransceiver videoTransceiver = session.peer.addTransceiver((MediaStreamTrack)session.localVideoTrack, new RtpTransceiver.RtpTransceiverInit(RtpTransceiver.RtpTransceiverDirection.SEND_ONLY, Collections.singletonList("video_stream1_airan")));
+            WebRtcClient.applyHardwareFirstVideoCodecPreferences(videoTransceiver, true);
             session.localVideoSender = videoTransceiver == null ? null : videoTransceiver.getSender();
             WebRtcClient.applyVideoSenderParameters(session);
             WebRtcClient.status("Android screen track bound: coded " + session.captureWidth + "x" + session.captureHeight + " visible " + session.captureVisibleWidth + "x" + session.captureVisibleHeight + "@" + session.captureFps);

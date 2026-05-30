@@ -283,33 +283,55 @@ extends WebRtcFileOps {
             return;
         }
         if (AiranConstants.TYPE_AUDIO_CAPTURE.equals(msgType)) {
-            String requestedMode = AudioModePolicy.normalize(object.optString(AiranConstants.KEY_AUDIO_MODE, object.optBoolean(AiranConstants.KEY_ENABLED, false) ? AudioModePolicy.LISTEN : AudioModePolicy.OFF));
-            session.remoteRequestedAudioMode = requestedMode;
-            if ("cli".equals(session.role) && !AudioModePolicy.OFF.equals(requestedMode) && !WebRtcClient.hasAudioTransceiver(session)) {
-                WebRtcClient.status("remote requested audio mode pending SDP offer: " + requestedMode);
+            if (object.optBoolean(AiranConstants.KEY_STATUS_ONLY, false)) {
+                if ("ctl".equals(session.role)) {
+                    boolean accepted = object.optBoolean(AiranConstants.KEY_ACCEPTED, false);
+                    String mode = AudioModePolicy.normalize(object.optString(AiranConstants.KEY_AUDIO_MODE, AudioModePolicy.OFF));
+                    audioMode = accepted ? mode : AudioModePolicy.OFF;
+                    WebRtcClient.applyLocalAudioState(session);
+                    WebRtcClient.status(accepted ? "remote accepted audio mode: " + audioMode : "remote rejected audio mode");
+                }
                 return;
             }
-            WebRtcClient.applyLocalAudioState(session);
-            WebRtcClient.status("remote requested audio mode: " + requestedMode);
-            return;
-        }
-        if (AiranConstants.TYPE_VIDEO_ADAPT_FEEDBACK.equals(msgType)) {
-            WebRtcClient.handleVideoAdaptFeedback(session, object);
-            return;
-        }
-        if ("keyframe_request".equals(msgType)) {
-            if (sharedScreenCapturer == null || sharedScreenCaptureStopped || screenCaptureIntent == null) {
-                WebRtcClient.refreshScreenCapture(session);
+            final String requestId = object.optString(AiranConstants.KEY_REQUEST_ID, "");
+            final String requestedMode = AudioModePolicy.normalize(object.optString(AiranConstants.KEY_AUDIO_MODE, object.optBoolean(AiranConstants.KEY_ENABLED, false) ? AudioModePolicy.LISTEN : AudioModePolicy.OFF));
+            if (!"cli".equals(session.role)) {
+                return;
             }
-            WebRtcClient.sendKeyframeResponse(session);
-            return;
-        }
-        if ("keyframe_response".equals(msgType)) {
-            WebRtcClient.status("keyframe response received");
-            return;
-        }
-        if ("keyboard".equals(msgType)) {
-            WebRtcClient.remoteInputHandler.handleKeyboard(object, session.inputAccessibilityWarning, WebRtcClient.accessibilityRequest(session));
+            if (AudioModePolicy.OFF.equals(requestedMode)) {
+                session.remoteRequestedAudioMode = AudioModePolicy.OFF;
+                WebRtcClient.applyLocalAudioState(session);
+                WebRtcClient.sendAudioCaptureResponse(session, requestId, AudioModePolicy.OFF, true, "Audio disabled.");
+                WebRtcClient.status("remote requested audio mode: off");
+                return;
+            }
+            UiEvents events = uiVisible ? uiEvents : null;
+            if (events == null) {
+                session.remoteRequestedAudioMode = requestedMode;
+                WebRtcClient.applyLocalAudioState(session);
+                WebRtcClient.sendAudioCaptureResponse(session, requestId, requestedMode, true, "Accepted without prompt.");
+                if (!WebRtcClient.hasAudioTransceiver(session)) {
+                    WebRtcClient.status("remote requested audio mode accepted pending SDP offer: " + requestedMode);
+                } else {
+                    WebRtcClient.status("remote requested audio mode: " + requestedMode);
+                }
+                return;
+            }
+            events.onRemoteAudioRequest(requestedMode, new AudioConsentCallback(){
+
+                @Override
+                public void onResult(boolean accepted) {
+                    if (session.stopped) {
+                        return;
+                    }
+                    session.remoteRequestedAudioMode = accepted ? requestedMode : AudioModePolicy.OFF;
+                    if (accepted) {
+                        WebRtcClient.applyLocalAudioState(session);
+                    }
+                    WebRtcClient.sendAudioCaptureResponse(session, requestId, session.remoteRequestedAudioMode, accepted, accepted ? "Remote audio accepted." : "Remote audio rejected.");
+                    WebRtcClient.status(accepted ? "remote requested audio mode: " + requestedMode : "remote audio request rejected");
+                }
+            });
             return;
         }
         if ("desktop_state".equals(msgType)) {

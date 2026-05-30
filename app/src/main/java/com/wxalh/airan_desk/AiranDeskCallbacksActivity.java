@@ -162,6 +162,42 @@ extends AiranDeskHomeActivity {
             }
         });
     }
+    @Override
+    public void onRemoteAudioRequest(final String mode, final WebRtcClient.AudioConsentCallback callback) {
+        this.runOnUiThread(new Runnable(){
+
+            @Override
+            public void run() {
+                if (AiranDeskCallbacksActivity.this.isFinishing()) {
+                    callback.onResult(true);
+                    return;
+                }
+                String label = AiranDeskCallbacksActivity.this.uiTextFormatter == null ? mode : AiranDeskCallbacksActivity.this.uiTextFormatter.audioModeLabel(mode);
+                new AlertDialog.Builder((Context)AiranDeskCallbacksActivity.this)
+                        .setTitle((CharSequence)AiranDeskCallbacksActivity.this.getString(R.string.remote_audio_request_title))
+                        .setMessage((CharSequence)AiranDeskCallbacksActivity.this.getString(R.string.remote_audio_request_message, new Object[]{label}))
+                        .setPositiveButton((CharSequence)AiranDeskCallbacksActivity.this.getString(R.string.allow), new DialogInterface.OnClickListener(){
+
+                            public void onClick(DialogInterface dialog, int which) {
+                                callback.onResult(true);
+                            }
+                        })
+                        .setNegativeButton((CharSequence)AiranDeskCallbacksActivity.this.getString(R.string.reject), new DialogInterface.OnClickListener(){
+
+                            public void onClick(DialogInterface dialog, int which) {
+                                callback.onResult(false);
+                            }
+                        })
+                        .setOnCancelListener(new DialogInterface.OnCancelListener(){
+
+                            public void onCancel(DialogInterface dialog) {
+                                callback.onResult(false);
+                            }
+                        })
+                        .show();
+            }
+        });
+    }
     protected void promptAccessibilityPermission() {
         long now = System.currentTimeMillis();
         if (WebRtcClient.isControlRole() || RemoteInputAccessibilityService.isReady() || this.accessibilityPromptShowing || now - this.lastAccessibilityPromptMs < 15000L) {

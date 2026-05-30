@@ -33,10 +33,6 @@ public final class UiTextFormatter {
         return this.context.getString(R.string.resolution_original);
     }
 
-    public String captureBackendLabel(String value) {
-        return "qt".equals(value) ? "CPU" : "GPU";
-    }
-
     public String audioModeLabel(String value) {
         String normalized = AudioModePolicy.normalize(value);
         if (AudioModePolicy.LISTEN.equals(normalized)) {

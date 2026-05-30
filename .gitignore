@@ -5,3 +5,5 @@ app/build/
 app/release/
 app/.cxx/
 local.properties
+app/libs/libwebrtc-android-release.aar
+.claude

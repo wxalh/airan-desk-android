@@ -240,6 +240,10 @@
     <string name="accessibility_control_open">Enable</string>
     <string name="accessibility_control_later">Later</string>
     <string name="accessibility_settings_open_failed">Could not open accessibility settings</string>
+    <string name="allow">Allow</string>
+    <string name="reject">Reject</string>
+    <string name="remote_audio_request_title">Remote audio request</string>
+    <string name="remote_audio_request_message">The controller wants to enable %1$s audio. Allow it?</string>
     <string name="mounts_label">Mounts</string>
     <string name="remote_path_label">Remote</string>
     <string name="terminal_connecting">Connecting to remote terminal...</string>

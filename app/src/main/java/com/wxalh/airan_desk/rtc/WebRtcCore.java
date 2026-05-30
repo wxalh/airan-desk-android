@@ -10,6 +10,7 @@ import android.os.PowerManager;
 import android.util.Base64;
 import android.util.DisplayMetrics;
 import android.util.Log;
+import com.wxalh.airan_desk.BuildConfig;
 import com.wxalh.airan_desk.config.AppConfig;
 import com.wxalh.airan_desk.file.DirectoryStats;
 import com.wxalh.airan_desk.file.DownloadDirectoryProvider;
@@ -53,9 +54,11 @@ import org.webrtc.RTCStats;
 import org.webrtc.RTCStatsCollectorCallback;
 import org.webrtc.RTCStatsReport;
 import org.webrtc.RtpParameters;
+import org.webrtc.RtpCapabilities;
 import org.webrtc.RtpReceiver;
 import org.webrtc.RtpSender;
 import org.webrtc.RtpTransceiver;
+import org.webrtc.RtcError;
 import org.webrtc.ScreenCapturerAndroid;
 import org.webrtc.SdpObserver;
 import org.webrtc.SessionDescription;
@@ -72,20 +75,13 @@ import org.webrtc.VideoTrack;
 @SuppressWarnings({"deprecation", "unchecked"})
 abstract class WebRtcCore {
     protected static final String TAG = "WebRtcClient";
-    protected static final String DEFAULT_BITRATE_PROFILE = "medium";
     protected static final String DEFAULT_NETWORK_PATH = "auto";
-    protected static final String DEFAULT_CAPTURE_BACKEND = "wgc";
     protected static final String DEFAULT_AUDIO_MODE = AudioModePolicy.OFF;
     protected static final int DEFAULT_CONNECT_VIDEO_WIDTH = -1;
     protected static final int DEFAULT_CONNECT_VIDEO_HEIGHT = -1;
     protected static final int DEFAULT_STREAM_VIDEO_WIDTH = 0;
     protected static final int DEFAULT_STREAM_VIDEO_HEIGHT = 0;
     protected static final int DEFAULT_VIDEO_FPS = 25;
-    protected static final long KEYFRAME_REQUEST_MIN_INTERVAL_MS = 6000L;
-    protected static final long KEYFRAME_INITIAL_DELAY_MS = 1200L;
-    protected static final long VIDEO_RECOVERY_MIN_INTERVAL_MS = 10000L;
-    protected static final long VIDEO_ADAPT_FEEDBACK_MIN_INTERVAL_MS = 4000L;
-    protected static final int SCREENCAST_MIN_BITRATE_BPS = 2500000;
     protected static final int MAX_DIRECT_DATA_CHANNEL_TEXT_BYTES = 49152;
     protected static final int SCREEN_CAPTURE_SERVICE_RETRY_MS = 200;
     protected static final int SCREEN_CAPTURE_SERVICE_MAX_ATTEMPTS = 20;
@@ -101,6 +97,7 @@ abstract class WebRtcCore {
     protected static Context appContext;
     protected static AppConfig config;
     protected static UiEvents uiEvents;
+    protected static boolean uiVisible;
     protected static PeerConnectionFactory factory;
     protected static EglBase eglBase;
     protected static VideoSink renderer;
@@ -129,9 +126,7 @@ abstract class WebRtcCore {
     protected static long lastSessionEndedMs;
     protected static final long SHARED_CAPTURE_IDLE_GRACE_MS = 60000L;
     protected static PowerManager.WakeLock remoteScreenWakeLock;
-    protected static String bitrateProfile;
     protected static String networkPath;
-    protected static String captureBackend;
     protected static String audioMode;
     protected static int streamWidth;
     protected static int streamHeight;
@@ -166,7 +161,7 @@ abstract class WebRtcCore {
         PeerConnectionFactory.InitializationOptions opts = PeerConnectionFactory.InitializationOptions.builder((Context)appContext).setEnableInternalTracer(false).createInitializationOptions();
         PeerConnectionFactory.initialize((PeerConnectionFactory.InitializationOptions)opts);
         DefaultVideoDecoderFactory decoderFactory = new DefaultVideoDecoderFactory(eglBase.getEglBaseContext());
-        Log.i((String)TAG, (String)"WebRTC decode priority: hardware-first via DefaultVideoDecoderFactory, GPU render via EglRenderer, hardware encode via DefaultVideoEncoderFactory");
+        Log.i((String)TAG, (String)("WebRTC " + BuildConfig.WEBRTC_MILESTONE + " decode priority: hardware-first via DefaultVideoDecoderFactory, GPU render via EglRenderer, hardware encode via DefaultVideoEncoderFactory"));
         factory = PeerConnectionFactory.builder().setVideoEncoderFactory((VideoEncoderFactory)new DefaultVideoEncoderFactory(eglBase.getEglBaseContext(), true, true)).setVideoDecoderFactory((VideoDecoderFactory)decoderFactory).createPeerConnectionFactory();
         initialized = true;
         WebRtcClient.status("WebRTC initialized");
@@ -176,6 +171,9 @@ abstract class WebRtcCore {
     }
     public static void setUiEvents(UiEvents events) {
         uiEvents = events;
+    }
+    public static void setUiVisible(boolean visible) {
+        uiVisible = visible;
     }
     public static void setRenderer(VideoSink value) {
         VideoSink previous = renderer;
@@ -523,53 +521,13 @@ abstract class WebRtcCore {
         }
     }
     public static boolean requestKeyframe() {
-        PeerSession session = WebRtcClient.requireActiveSession("keyframe request");
-        if (session == null) {
-            return false;
-        }
-        return WebRtcClient.requestKeyframe(session, "manual");
+        WebRtcClient.status("keyframe recovery is managed automatically by WebRTC RTCP");
+        return true;
     }
     protected static boolean requestKeyframe(PeerSession session, String reason) {
-        try {
-            if (!"ctl".equals(session.role) || !"desktop".equals(session.mode)) {
-                return false;
-            }
-            long now = System.currentTimeMillis();
-            long backoffMs = Math.max(KEYFRAME_REQUEST_MIN_INTERVAL_MS, session.keyframeRequestBackoffMs);
-            if (now - session.lastKeyframeRequestMs < backoffMs) {
-                WebRtcClient.status("keyframe request skipped: throttled" + (reason == null || reason.length() == 0 ? "" : " (" + reason + ")"));
-                return false;
-            }
-            JSONObject object = new JSONObject();
-            object.put("msgType", (Object)"keyframe_request");
-            object.put("sender", (Object)config.localId());
-            object.put("receiver", (Object)session.remoteId);
-            object.put("receiver_pwd", (Object)session.remotePwdMd5);
-            boolean sent = WebRtcClient.sendInput(session, object);
-            if (sent) {
-                session.lastKeyframeRequestMs = now;
-                session.keyframeRequestBackoffMs = Math.min(16000L, Math.max(KEYFRAME_REQUEST_MIN_INTERVAL_MS, backoffMs * 2L));
-            }
-            WebRtcClient.status(sent ? "keyframe request sent" + (reason == null ? "" : ": " + reason) : "keyframe request queued until input opens");
-            return sent;
-        }
-        catch (Exception e) {
-            WebRtcClient.status("keyframe request failed: " + e.getMessage());
-            return false;
-        }
+        return false;
     }
     protected static void sendKeyframeResponse(PeerSession session) {
-        try {
-            JSONObject object = new JSONObject();
-            object.put("msgType", (Object)"keyframe_response");
-            object.put("sender", (Object)config.localId());
-            object.put("receiver", (Object)session.remoteId);
-            object.put("status", true);
-            WebRtcClient.sendInput(session, object);
-        }
-        catch (Exception e) {
-            WebRtcClient.status("keyframe response failed: " + e.getMessage());
-        }
     }
     public static boolean sendStreamConfig() {
         PeerSession session = WebRtcClient.requireActiveSession("stream config");
@@ -578,35 +536,17 @@ abstract class WebRtcCore {
         }
         return WebRtcClient.sendStreamConfig(session);
     }
-    public static boolean setBitrateProfile(String profile) {
-        String normalized;
-        bitrateProfile = normalized = StreamConfigPolicy.normalizeOneOf(profile, DEFAULT_BITRATE_PROFILE, "low", DEFAULT_BITRATE_PROFILE, "high");
-        WebRtcClient.resetActiveVideoAdaptationBase();
-        return WebRtcClient.sendStreamConfig();
-    }
     public static boolean setResolution(int width, int height) {
         streamWidth = Math.max(0, width);
         streamHeight = Math.max(0, height);
-        WebRtcClient.resetActiveVideoAdaptationBase();
-        return WebRtcClient.sendStreamConfig();
-    }
-    public static boolean setCaptureBackend(String backend) {
-        String normalized;
-        captureBackend = normalized = StreamConfigPolicy.normalizeOneOf(backend, DEFAULT_CAPTURE_BACKEND, DEFAULT_CAPTURE_BACKEND, "qt", DEFAULT_NETWORK_PATH);
         return WebRtcClient.sendStreamConfig();
     }
     public static boolean setNetworkPath(String path) {
         networkPath = StreamConfigPolicy.normalizeOneOf(path, DEFAULT_NETWORK_PATH, DEFAULT_NETWORK_PATH, "direct", "turn_udp", "turn_tcp");
         return true;
     }
-    public static String bitrateProfile() {
-        return bitrateProfile;
-    }
     public static String networkPath() {
         return networkPath;
-    }
-    public static String captureBackend() {
-        return captureBackend;
     }
     public static int streamWidth() {
         return streamWidth;
@@ -660,6 +600,81 @@ abstract class WebRtcCore {
     public static String audioMode() {
         return audioMode;
     }
+    protected static String encoderTypeFromName(String encoderName) {
+        String normalized = encoderName == null ? "" : encoderName.toLowerCase(Locale.ROOT);
+        if (normalized.contains("hardware-first")) {
+            return "hardware_preferred";
+        }
+        if (normalized.contains("google") || normalized.contains("libvpx") || normalized.contains("openh264") || normalized.contains("software")) {
+            return "software";
+        }
+        if (normalized.contains("omx.") || normalized.contains("c2.") || normalized.contains("mediacodec") || normalized.contains("qcom") || normalized.contains("exynos") || normalized.contains("mtk") || normalized.contains("hardware") || normalized.contains(" hw")) {
+            return "hardware";
+        }
+        return "auto";
+    }
+    protected static int hardwareFirstVideoCodecRank(RtpCapabilities.CodecCapability codec) {
+        if (codec == null) {
+            return 1000;
+        }
+        String mime = codec.mimeType == null ? "" : codec.mimeType.toLowerCase(Locale.ROOT);
+        String name = codec.name == null ? "" : codec.name.toLowerCase(Locale.ROOT);
+        String value = mime.length() > 0 ? mime : "video/" + name;
+        if ("video/h264".equals(value)) {
+            return 0;
+        }
+        if ("video/vp9".equals(value)) {
+            return 10;
+        }
+        if ("video/av1".equals(value)) {
+            return 20;
+        }
+        if ("video/vp8".equals(value)) {
+            return 30;
+        }
+        if ("video/rtx".equals(value)) {
+            return 100;
+        }
+        if ("video/red".equals(value)) {
+            return 110;
+        }
+        if ("video/ulpfec".equals(value)) {
+            return 120;
+        }
+        if ("video/flexfec-03".equals(value)) {
+            return 130;
+        }
+        return 200;
+    }
+    protected static void applyHardwareFirstVideoCodecPreferences(RtpTransceiver transceiver, boolean senderCapabilities) {
+        if (transceiver == null || factory == null) {
+            return;
+        }
+        try {
+            RtpCapabilities capabilities = senderCapabilities
+                    ? factory.getRtpSenderCapabilities(MediaStreamTrack.MediaType.MEDIA_TYPE_VIDEO)
+                    : factory.getRtpReceiverCapabilities(MediaStreamTrack.MediaType.MEDIA_TYPE_VIDEO);
+            if (capabilities == null || capabilities.codecs == null || capabilities.codecs.isEmpty()) {
+                WebRtcClient.status("video codec preferences skipped: no capabilities");
+                return;
+            }
+            List<RtpCapabilities.CodecCapability> codecs = new ArrayList<RtpCapabilities.CodecCapability>(capabilities.codecs);
+            Collections.sort(codecs, new java.util.Comparator<RtpCapabilities.CodecCapability>(){
+
+                @Override
+                public int compare(RtpCapabilities.CodecCapability left, RtpCapabilities.CodecCapability right) {
+                    return WebRtcClient.hardwareFirstVideoCodecRank(left) - WebRtcClient.hardwareFirstVideoCodecRank(right);
+                }
+            });
+            RtcError error = transceiver.setCodecPreferences(codecs);
+            WebRtcClient.status(error == null || error.isSuccess()
+                    ? "video codec preference: hardware-first"
+                    : "video codec preference failed");
+        }
+        catch (Exception e) {
+            WebRtcClient.status("video codec preference failed: " + e.getMessage());
+        }
+    }
     public static boolean sendAudioCaptureConfig() {
         PeerSession session = WebRtcClient.requireActiveSession("audio config");
         return session != null && WebRtcClient.sendAudioCaptureConfig(session);
@@ -675,26 +690,14 @@ abstract class WebRtcCore {
             object.put("sender", (Object)config.localId());
             object.put("receiver", (Object)session.remoteId);
             object.put("receiver_pwd", (Object)session.remotePwdMd5);
-            object.put("bitrateProfile", (Object)bitrateProfile);
             object.put("networkPath", (Object)networkPath);
-            object.put("captureBackend", (Object)captureBackend);
             object.put("width", streamWidth);
             object.put("height", streamHeight);
             object.put("fps", streamFps);
             object.put("audioMode", (Object)audioMode);
             if ("cli".equals(session.role)) {
-                object.put("statusOnly", true);
-                object.put("adaptive", session.videoAdaptLevel > 0);
-                object.put("adaptLevel", session.videoAdaptLevel);
+                object.put(AiranConstants.KEY_STATUS_ONLY, true);
                 object.put("os", (Object)"android");
-                int bitrateWidth = session.captureVisibleWidth > 0 ? session.captureVisibleWidth : session.captureWidth;
-                int bitrateHeight = session.captureVisibleHeight > 0 ? session.captureVisibleHeight : session.captureHeight;
-                object.put("bitrate", WebRtcClient.targetVideoBitrateBps(bitrateWidth, bitrateHeight, session.captureFps) / 1000);
-                JSONArray backends = new JSONArray();
-                backends.put((Object)"mediaprojection");
-                object.put("captureBackends", (Object)backends);
-                object.put("captureBackend", (Object)"mediaprojection");
-                object.put("captureName", (Object)"Android MediaProjection");
                 int[] rect = WebRtcClient.outboundCaptureRectForSession(session);
                 object.put(AiranConstants.KEY_CODED_WIDTH, rect[CAPTURE_RECT_CODED_WIDTH]);
                 object.put(AiranConstants.KEY_CODED_HEIGHT, rect[CAPTURE_RECT_CODED_HEIGHT]);
@@ -704,9 +707,15 @@ abstract class WebRtcCore {
                 object.put(AiranConstants.KEY_PAD_TOP, rect[CAPTURE_RECT_PAD_TOP]);
                 object.put(AiranConstants.KEY_PAD_RIGHT, rect[CAPTURE_RECT_PAD_RIGHT]);
                 object.put(AiranConstants.KEY_PAD_BOTTOM, rect[CAPTURE_RECT_PAD_BOTTOM]);
-                if (session.lastOutboundVideoEncoder.length() > 0) {
-                    object.put("encoderName", (Object)session.lastOutboundVideoEncoder);
+                String negotiatedCodec = session.negotiatedVideoCodec.length() > 0 ? session.negotiatedVideoCodec : session.remoteAnswerVideoCodec;
+                if (negotiatedCodec.length() == 0) {
+                    negotiatedCodec = session.localAnswerVideoCodec.length() > 0 ? session.localAnswerVideoCodec : session.localOfferFirstVideoCodec;
                 }
+                String encoderName = session.lastOutboundVideoEncoder.length() > 0 ? session.lastOutboundVideoEncoder : "Android MediaCodec " + (negotiatedCodec.length() > 0 ? negotiatedCodec : "video") + " HW pending";
+                object.put(AiranConstants.KEY_VIDEO_CODEC, (Object)(negotiatedCodec.length() > 0 ? negotiatedCodec : "unknown"));
+                object.put(AiranConstants.KEY_CAPTURE_METHOD, (Object)"Android ScreenCapturer");
+                object.put(AiranConstants.KEY_ENCODER_NAME, (Object)encoderName);
+                object.put(AiranConstants.KEY_ENCODER_TYPE, (Object)WebRtcClient.encoderTypeFromName(encoderName));
             }
             WebRtcClient.status((sent = WebRtcClient.sendInput(session, object)) ? "stream config sent: " + WebRtcClient.streamConfigSummary() : "stream config waiting for input channel");
             return sent;
@@ -717,7 +726,7 @@ abstract class WebRtcCore {
         }
     }
     protected static String streamConfigSummary() {
-        return StreamConfigPolicy.summary(bitrateProfile, streamWidth, streamHeight, streamFps, captureBackend, networkPath);
+        return StreamConfigPolicy.summary(streamWidth, streamHeight, streamFps, networkPath);
     }
     protected static boolean sendAudioCaptureConfig(PeerSession session) {
         try {
@@ -729,6 +738,7 @@ abstract class WebRtcCore {
             object.put(AiranConstants.KEY_SENDER, (Object)config.localId());
             object.put(AiranConstants.KEY_RECEIVER, (Object)session.remoteId);
             object.put(AiranConstants.KEY_RECEIVER_PWD, (Object)session.remotePwdMd5);
+            object.put(AiranConstants.KEY_REQUEST_ID, (Object)UUID.randomUUID().toString());
             object.put(AiranConstants.KEY_ENABLED, AudioModePolicy.receivesRemoteAudio(audioMode));
             object.put(AiranConstants.KEY_AUDIO_MODE, (Object)audioMode);
             boolean sent = WebRtcClient.sendInput(session, object);
@@ -737,6 +747,30 @@ abstract class WebRtcCore {
         }
         catch (Exception e) {
             WebRtcClient.status("audio config failed: " + e.getMessage());
+            return false;
+        }
+    }
+    protected static boolean sendAudioCaptureResponse(PeerSession session, String requestId, String mode, boolean accepted, String message) {
+        try {
+            if (session == null || !DataChannelUtils.isOpen(session.inputChannel)) {
+                return false;
+            }
+            JSONObject object = new JSONObject();
+            object.put(AiranConstants.KEY_MSGTYPE, (Object)AiranConstants.TYPE_AUDIO_CAPTURE);
+            object.put(AiranConstants.KEY_SENDER, (Object)config.localId());
+            object.put(AiranConstants.KEY_RECEIVER, (Object)session.remoteId);
+            object.put(AiranConstants.KEY_STATUS_ONLY, true);
+            object.put(AiranConstants.KEY_REQUEST_ID, (Object)(requestId == null ? "" : requestId));
+            object.put(AiranConstants.KEY_ACCEPTED, accepted);
+            object.put(AiranConstants.KEY_ENABLED, accepted && AudioModePolicy.receivesRemoteAudio(mode));
+            object.put(AiranConstants.KEY_AUDIO_MODE, (Object)AudioModePolicy.normalize(mode));
+            object.put(AiranConstants.KEY_MESSAGE, (Object)(message == null ? "" : message));
+            boolean sent = WebRtcClient.sendInput(session, object);
+            WebRtcClient.status(sent ? "audio response sent: " + mode + " accepted=" + accepted : "audio response waiting for input channel");
+            return sent;
+        }
+        catch (Exception e) {
+            WebRtcClient.status("audio response failed: " + e.getMessage());
             return false;
         }
     }
@@ -781,9 +815,7 @@ abstract class WebRtcCore {
     }
     static {
         sessions = new LinkedHashMap<String, PeerSession>();
-        bitrateProfile = DEFAULT_BITRATE_PROFILE;
         networkPath = DEFAULT_NETWORK_PATH;
-        captureBackend = DEFAULT_CAPTURE_BACKEND;
         audioMode = DEFAULT_AUDIO_MODE;
         streamWidth = 0;
         streamHeight = 0;
@@ -819,6 +851,12 @@ abstract class WebRtcCore {
         public void onStorageAccessRequired();
 
         public void onAccessibilityPermissionRequired();
+
+        public void onRemoteAudioRequest(String var1, AudioConsentCallback var2);
+    }
+
+    public static interface AudioConsentCallback {
+        public void onResult(boolean var1);
     }
 
 }

@@ -314,21 +314,6 @@ extends AiranDeskDesktopInteractionActivity {
     protected View desktopControlToolbar() {
         LinearLayout root = this.toolbarRows();
         LinearLayout row = this.toolbarRow();
-        this.desktopBitrateButton = this.toolbarChip("", new View.OnClickListener(){
-
-            public void onClick(View v) {
-                DesktopSettingsMenus.showValueMenu((Context)AiranDeskDesktopActivity.this, v, new String[]{AiranDeskDesktopActivity.this.getString(R.string.bitrate_low), AiranDeskDesktopActivity.this.getString(R.string.bitrate_medium), AiranDeskDesktopActivity.this.getString(R.string.bitrate_high)}, new String[]{"low", "medium", "high"}, WebRtcClient.bitrateProfile(), new DesktopSettingsMenus.ValueSelection(){
-
-                    @Override
-                    public void onSelected(String value) {
-                        WebRtcClient.setBitrateProfile(value);
-                        AiranDeskDesktopActivity.this.updateDesktopToolbarLabels();
-                        AiranDeskDesktopActivity.this.showUserStatus("bitrate profile: " + value);
-                    }
-                });
-            }
-        });
-        row.addView((View)this.desktopBitrateButton, (ViewGroup.LayoutParams)this.toolbarChipLayout(true));
         this.desktopResolutionButton = this.toolbarChip("", new View.OnClickListener(){
 
             public void onClick(View v) {
@@ -362,21 +347,6 @@ extends AiranDeskDesktopInteractionActivity {
         row.addView((View)this.desktopDisplayButton, (ViewGroup.LayoutParams)this.toolbarChipLayout(true));
         root.addView((View)row, (ViewGroup.LayoutParams)this.uiFactory.fullWidth());
         row = this.toolbarRow();
-        this.desktopCaptureButton = this.toolbarChip("", new View.OnClickListener(){
-
-            public void onClick(View v) {
-                DesktopSettingsMenus.showValueMenu((Context)AiranDeskDesktopActivity.this, v, new String[]{"GPU", "CPU"}, new String[]{"wgc", "qt"}, WebRtcClient.captureBackend(), new DesktopSettingsMenus.ValueSelection(){
-
-                    @Override
-                    public void onSelected(String value) {
-                        WebRtcClient.setCaptureBackend(value);
-                        AiranDeskDesktopActivity.this.updateDesktopToolbarLabels();
-                        AiranDeskDesktopActivity.this.showUserStatus("capture backend: " + value);
-                    }
-                });
-            }
-        });
-        row.addView((View)this.desktopCaptureButton, (ViewGroup.LayoutParams)this.toolbarChipLayout(false));
         this.desktopNetworkButton = this.toolbarChip("", new View.OnClickListener(){
 
             public void onClick(View v) {
@@ -802,14 +772,8 @@ extends AiranDeskDesktopInteractionActivity {
         }
     }
     protected void updateDesktopToolbarLabels() {
-        if (this.desktopBitrateButton != null) {
-            this.desktopBitrateButton.setText((CharSequence)(this.getString(R.string.desktop_bitrate) + "\n" + this.uiTextFormatter.bitrateLabel(WebRtcClient.bitrateProfile())));
-        }
         if (this.desktopResolutionButton != null) {
             this.desktopResolutionButton.setText((CharSequence)(this.getString(R.string.desktop_resolution) + "\n" + this.uiTextFormatter.resolutionLabel(WebRtcClient.streamWidth(), WebRtcClient.streamHeight())));
-        }
-        if (this.desktopCaptureButton != null) {
-            this.desktopCaptureButton.setText((CharSequence)(this.getString(R.string.desktop_capture) + "\n" + this.uiTextFormatter.captureBackendLabel(WebRtcClient.captureBackend())));
         }
         if (this.desktopNetworkButton != null) {
             this.desktopNetworkButton.setText((CharSequence)(this.getString(R.string.desktop_network) + "\n" + this.uiTextFormatter.networkPathLabel(WebRtcClient.networkPath())));

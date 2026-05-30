@@ -155,22 +155,17 @@ extends WebRtcStatsOps {
         session.feedbackDecodeQueueVar = 0.0;
         session.feedbackLossRateEwma = 0.0;
         session.feedbackLossRateVar = 0.0;
-        session.lastVideoAdaptFeedbackMs = 0L;
         session.baseCaptureFps = 0;
-        session.baseBitrateProfile = "";
         session.videoAdaptLevel = 0;
         session.stableVideoFeedbacks = 0;
-        session.lastVideoAdaptApplyMs = 0L;
         session.stagnantInboundVideoPolls = 0;
         session.lastVideoRecoveryMs = 0L;
         session.lastKeyframeRequestMs = 0L;
-        session.keyframeRequestBackoffMs = KEYFRAME_REQUEST_MIN_INTERVAL_MS;
         session.lastOutboundVideoBytes = 0L;
         session.lastOutboundVideoFramesEncoded = 0L;
         session.lastOutboundVideoHugeFrames = 0L;
         session.lastOutboundVideoWidth = 0L;
         session.lastOutboundVideoHeight = 0L;
-        session.lastOutboundVideoAdaptMs = 0L;
         session.lastOutboundResolutionRestoreMs = 0L;
         session.initialKeyframeRequested = false;
         session.terminalStartPending = false;
@@ -182,6 +177,11 @@ extends WebRtcStatsOps {
         session.remoteAnswerSet = false;
         session.lastRemoteDescriptionType = "";
         session.lastRemoteDescriptionSdp = "";
+        session.localOfferFirstVideoCodec = "";
+        session.localAnswerVideoCodec = "";
+        session.remoteOfferFirstVideoCodec = "";
+        session.remoteAnswerVideoCodec = "";
+        session.negotiatedVideoCodec = "";
         session.pendingCandidates.clear();
         if (session.peer != null) {
             try {

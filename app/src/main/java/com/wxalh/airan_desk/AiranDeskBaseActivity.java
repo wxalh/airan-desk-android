@@ -304,9 +304,7 @@ WebRtcClient.UiEvents {
     protected String remoteIdDraft = "";
     protected String remotePasswordDraft = "";
     protected String desktopDisplayMode = "fit";
-    protected Button desktopBitrateButton;
     protected Button desktopResolutionButton;
-    protected Button desktopCaptureButton;
     protected Button desktopNetworkButton;
     protected Button desktopDisplayButton;
     protected Button desktopAudioButton;

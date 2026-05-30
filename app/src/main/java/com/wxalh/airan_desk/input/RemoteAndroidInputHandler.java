@@ -33,7 +33,7 @@ public final class RemoteAndroidInputHandler {
             return;
         }
         String normalized = action == null ? "" : action.trim().toLowerCase(Locale.US);
-        boolean ok = "back".equals(normalized) ? RemoteInputAccessibilityService.globalBack() : ("home".equals(normalized) ? RemoteInputAccessibilityService.globalHome() : ("recents".equals(normalized) ? RemoteInputAccessibilityService.globalRecents() : ("menu".equals(normalized) ? false : false)));
+        boolean ok = "back".equals(normalized) ? RemoteInputAccessibilityService.globalBack() : ("home".equals(normalized) ? RemoteInputAccessibilityService.globalHome() : ("recents".equals(normalized) ? RemoteInputAccessibilityService.globalRecents() : false));
         reportResult(warning, ok, accessibilityRequest);
         if (!ok) {
             status("Android navigation unsupported or accessibility disabled: " + normalized);

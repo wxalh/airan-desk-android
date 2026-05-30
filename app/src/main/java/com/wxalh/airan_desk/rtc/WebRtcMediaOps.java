@@ -86,9 +86,6 @@ extends WebRtcPeerSignalingOps {
         try {
             WebRtcClient.applyRequestedStreamConfig(object);
             session.baseCaptureFps = streamFps;
-            session.baseBitrateProfile = bitrateProfile;
-            session.videoAdaptLevel = 0;
-            session.stableVideoFeedbacks = 0;
             if (sharedScreenCapturer == null || sharedScreenCaptureStopped || screenCaptureIntent == null) {
                 WebRtcClient.sendStreamConfig(session);
                 return;
@@ -125,14 +122,8 @@ extends WebRtcPeerSignalingOps {
         if (object == null) {
             return;
         }
-        if (object.has("bitrateProfile")) {
-            bitrateProfile = StreamConfigPolicy.normalizeOneOf(object.optString("bitrateProfile"), DEFAULT_BITRATE_PROFILE, "low", DEFAULT_BITRATE_PROFILE, "high");
-        }
         if (object.has("networkPath")) {
             networkPath = StreamConfigPolicy.normalizeOneOf(object.optString("networkPath"), DEFAULT_NETWORK_PATH, DEFAULT_NETWORK_PATH, "direct", "turn_udp", "turn_tcp");
-        }
-        if (object.has("captureBackend")) {
-            captureBackend = "mediaprojection";
         }
         if (object.has("width")) {
             streamWidth = object.optInt("width", streamWidth);
@@ -149,14 +140,8 @@ extends WebRtcPeerSignalingOps {
             return;
         }
         boolean statusOnly = object.optBoolean("statusOnly", false);
-        if (!statusOnly && object.has("bitrateProfile")) {
-            bitrateProfile = StreamConfigPolicy.normalizeOneOf(object.optString("bitrateProfile"), DEFAULT_BITRATE_PROFILE, "low", DEFAULT_BITRATE_PROFILE, "high");
-        }
         if (!statusOnly && object.has("networkPath")) {
             networkPath = StreamConfigPolicy.normalizeOneOf(object.optString("networkPath"), DEFAULT_NETWORK_PATH, DEFAULT_NETWORK_PATH, "direct", "turn_udp", "turn_tcp");
-        }
-        if (object.has("captureBackend")) {
-            captureBackend = object.optString("captureBackend", captureBackend);
         }
         boolean hasAnyVideoRect = object.has(AiranConstants.KEY_CODED_WIDTH) || object.has(AiranConstants.KEY_CODED_HEIGHT)
                 || object.has(AiranConstants.KEY_VISIBLE_WIDTH) || object.has(AiranConstants.KEY_VISIBLE_HEIGHT)
@@ -185,10 +170,8 @@ extends WebRtcPeerSignalingOps {
         }
         String os = object.optString("os");
         String encoder = object.optString("encoderName");
-        String bitrate = object.has("bitrate") ? String.valueOf(object.optInt("bitrate")) + "kbps" : "";
         String frameRect = remoteVisibleWidth > 0 && remoteVisibleHeight > 0 ? " visible=" + remoteVisibleWidth + "x" + remoteVisibleHeight + " coded=" + remoteCodedWidth + "x" + remoteCodedHeight : "";
-        String adapt = object.optBoolean("adaptive", false) ? " adaptLevel=" + object.optInt("adaptLevel", 0) : "";
-        String entry = "remote stream: " + WebRtcClient.streamConfigSummary() + frameRect + (os.length() == 0 ? "" : " os=" + os) + (bitrate.length() == 0 ? "" : " bitrate=" + bitrate) + (encoder.length() == 0 ? "" : " encoder=" + encoder) + adapt;
+        String entry = "remote stream: " + WebRtcClient.streamConfigSummary() + frameRect + (os.length() == 0 ? "" : " os=" + os) + (encoder.length() == 0 ? "" : " encoder=" + encoder);
         if (session != null && entry.equals(session.lastRemoteStreamStatusLog)) {
             return;
         }
@@ -215,18 +198,6 @@ extends WebRtcPeerSignalingOps {
             remotePadBottom = Math.min(remotePadBottom, Math.max(0, remoteCodedHeight - remoteVisibleHeight - remotePadTop));
         }
     }
-    protected static void resetActiveVideoAdaptationBase() {
-        PeerSession session = activeSession;
-        if (session == null || !"cli".equals(session.role) || !"desktop".equals(session.mode)) {
-            return;
-        }
-        session.baseCaptureFps = streamFps;
-        session.baseBitrateProfile = bitrateProfile;
-        session.videoAdaptLevel = 0;
-        session.stableVideoFeedbacks = 0;
-        session.lastVideoAdaptApplyMs = 0L;
-        session.lastOutboundVideoAdaptMs = 0L;
-    }
     protected static void applyVideoSenderParameters(PeerSession session) {
         if (session == null || session.stopped || session.peer == null || session.localVideoSender == null) {
             return;
@@ -236,35 +207,23 @@ extends WebRtcPeerSignalingOps {
             if (parameters == null) {
                 return;
             }
-            parameters.degradationPreference = RtpParameters.DegradationPreference.DISABLED;
-            int bitrateWidth = session.captureVisibleWidth > 0 ? session.captureVisibleWidth : session.captureWidth;
-            int bitrateHeight = session.captureVisibleHeight > 0 ? session.captureVisibleHeight : session.captureHeight;
-            int targetBps = WebRtcClient.targetVideoBitrateBps(bitrateWidth, bitrateHeight, session.captureFps);
+            parameters.degradationPreference = RtpParameters.DegradationPreference.BALANCED;
             if (parameters.encodings != null) {
                 for (RtpParameters.Encoding encoding : parameters.encodings) {
                     if (encoding == null) continue;
                     encoding.active = true;
-                    encoding.maxBitrateBps = targetBps;
-                    encoding.minBitrateBps = Math.max(800000, targetBps / 2);
+                    encoding.maxBitrateBps = null;
+                    encoding.minBitrateBps = null;
                     encoding.maxFramerate = Math.max(5, session.captureFps);
                     encoding.scaleResolutionDownBy = 1.0;
                 }
             }
             boolean ok = session.localVideoSender.setParameters(parameters);
-            WebRtcClient.status("video sender params " + (ok ? "applied" : "rejected") + ": " + targetBps / 1000 + "kbps resolution-locked");
+            WebRtcClient.status("video sender params " + (ok ? "applied" : "rejected") + ": libwebrtc auto bitrate");
         }
         catch (Exception e) {
-            String message = e.getMessage() == null ? "" : e.getMessage();
-            if (message.toLowerCase(Locale.US).contains("disposed") || session.stopped || session.peer == null) {
-                WebRtcClient.status("video sender params skipped: sender disposed");
-                session.localVideoSender = null;
-                return;
-            }
-            WebRtcClient.status("video sender params failed: " + message);
+            WebRtcClient.status("video sender params failed: " + e.getMessage());
         }
-    }
-    protected static int targetVideoBitrateBps(int width, int height, int fps) {
-        return VideoBitratePolicy.targetBps(width, height, fps, bitrateProfile, DEFAULT_BITRATE_PROFILE);
     }
     protected static void refreshScreenCapture(PeerSession session) {
         if (session == null || session.stopped || session.peer == null) {

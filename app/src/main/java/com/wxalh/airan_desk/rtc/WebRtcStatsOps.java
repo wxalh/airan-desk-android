@@ -96,12 +96,48 @@ extends WebRtcMediaOps {
             }
         });
     }
+
+    private static Map<String, String> codecMimeById(RTCStatsReport report) {
+        LinkedHashMap<String, String> codecs = new LinkedHashMap<String, String>();
+        if (report == null || report.getStatsMap() == null) {
+            return codecs;
+        }
+        for (RTCStats stat : report.getStatsMap().values()) {
+            if (stat == null || stat.getMembers() == null || !"codec".equals(stat.getType())) {
+                continue;
+            }
+            String mime = RtcStatsUtils.stringMember(stat.getMembers(), "mimeType");
+            if (mime.length() > 0) {
+                codecs.put(stat.getId(), normalizeVideoCodec(mime));
+            }
+        }
+        return codecs;
+    }
+
+    private static String normalizeVideoCodec(String mimeType) {
+        if (mimeType == null) {
+            return "";
+        }
+        String codec = mimeType.trim();
+        int slash = codec.indexOf('/');
+        if (slash >= 0 && slash + 1 < codec.length()) {
+            codec = codec.substring(slash + 1);
+        }
+        int semicolon = codec.indexOf(';');
+        if (semicolon >= 0) {
+            codec = codec.substring(0, semicolon);
+        }
+        return codec.trim().toUpperCase(Locale.US);
+    }
+
     protected static void logOutboundStats(PeerSession session, RTCStatsReport report) {
         if (session == null || report == null || report.getStatsMap() == null || !"cli".equals(session.role)) {
             return;
         }
+        Map<String, String> codecById = codecMimeById(report);
         String video = "";
         String encoder = "";
+        String negotiatedCodec = "";
         long bytesSent = -1L;
         long framesEncoded = -1L;
         long hugeFramesSent = -1L;
@@ -114,6 +150,10 @@ extends WebRtcMediaOps {
                 kind = RtcStatsUtils.stringMember(members, "mediaType");
             }
             if (!"video".equals(kind)) continue;
+            String codecId = RtcStatsUtils.stringMember(members, "codecId");
+            if (codecId.length() > 0 && codecById.containsKey(codecId)) {
+                negotiatedCodec = codecById.get(codecId);
+            }
             encoder = RtcStatsUtils.stringMember(members, "encoderImplementation");
             bytesSent = RtcStatsUtils.longMember(members, "bytesSent");
             framesEncoded = RtcStatsUtils.longMember(members, "framesEncoded");
@@ -129,12 +169,19 @@ extends WebRtcMediaOps {
             session.lastOutboundVideoWidth = encodedWidth;
             session.lastOutboundVideoHeight = encodedHeight;
             qualityLimit = RtcStatsUtils.stringMember(members, "qualityLimitationReason");
-            video = "bytes=" + bytesSent + " packets=" + RtcStatsUtils.longMember(members, "packetsSent") + " framesEncoded=" + framesEncoded + " keyFramesEncoded=" + RtcStatsUtils.longMember(members, "keyFramesEncoded") + " hugeFramesSent=" + hugeFramesSent + " encoded=" + encodedWidth + "x" + encodedHeight + " qpSum=" + RtcStatsUtils.longMember(members, "qpSum") + " encoder=" + encoder + " qualityLimit=" + qualityLimit;
+            video = "codec=" + negotiatedCodec + " bytes=" + bytesSent + " packets=" + RtcStatsUtils.longMember(members, "packetsSent") + " framesEncoded=" + framesEncoded + " keyFramesEncoded=" + RtcStatsUtils.longMember(members, "keyFramesEncoded") + " hugeFramesSent=" + hugeFramesSent + " encoded=" + encodedWidth + "x" + encodedHeight + " qpSum=" + RtcStatsUtils.longMember(members, "qpSum") + " encoder=" + encoder + " qualityLimit=" + qualityLimit;
         }
         if (video.length() == 0) {
             return;
         }
         Log.i((String)TAG, (String)("RTC outbound stats video[" + video + "]"));
+        if (negotiatedCodec.length() > 0 && !negotiatedCodec.equals(session.negotiatedVideoCodec)) {
+            session.negotiatedVideoCodec = negotiatedCodec;
+            WebRtcClient.status("Negotiated outbound video codec: " + negotiatedCodec);
+            if (session.inputChannel != null && session.inputChannel.state() == DataChannel.State.OPEN) {
+                WebRtcClient.sendStreamConfig(session);
+            }
+        }
         if (encoder.length() > 0 && !encoder.equals(session.lastOutboundVideoEncoder)) {
             session.lastOutboundVideoEncoder = encoder;
             WebRtcClient.status("Android video encoder: " + encoder);
@@ -143,84 +190,16 @@ extends WebRtcMediaOps {
             }
         }
         if (bytesSent >= 0L && framesEncoded >= 0L && hugeFramesSent >= 0L) {
-            WebRtcClient.ensureOutboundResolutionLocked(session);
-            WebRtcClient.maybeAdaptOutboundVideo(session, bytesSent, framesEncoded, hugeFramesSent, qualityLimit);
         }
-    }
-    protected static void ensureOutboundResolutionLocked(PeerSession session) {
-        if (session == null || session.stopped || sharedScreenCapturer == null || sharedScreenCaptureStopped) {
-            return;
-        }
-        long encodedWidth = session.lastOutboundVideoWidth;
-        long encodedHeight = session.lastOutboundVideoHeight;
-        if (encodedWidth <= 0L || encodedHeight <= 0L || session.captureWidth <= 0 || session.captureHeight <= 0) {
-            return;
-        }
-        int encodedLong = (int)Math.max(encodedWidth, encodedHeight);
-        int captureLong = Math.max(session.captureWidth, session.captureHeight);
-        if (encodedLong * 100 >= captureLong * 90) {
-            return;
-        }
-        long now = System.currentTimeMillis();
-        if (now - session.lastOutboundResolutionRestoreMs < 6000L) {
-            return;
-        }
-        session.lastOutboundResolutionRestoreMs = now;
-        try {
-            WebRtcClient.applyVideoSenderParameters(session);
-            WebRtcClient.status("Android outbound resolution lock reapplied: encoded=" + encodedWidth + "x" + encodedHeight + " coded=" + session.captureWidth + "x" + session.captureHeight + " visible=" + session.captureVisibleWidth + "x" + session.captureVisibleHeight);
-        }
-        catch (Exception e) {
-            WebRtcClient.status("Android outbound resolution restore failed: " + e.getMessage());
-        }
-    }
-    protected static void maybeAdaptOutboundVideo(PeerSession session, long bytesSent, long framesEncoded, long hugeFramesSent, String qualityLimit) {
-        if (session == null || !"cli".equals(session.role) || !"desktop".equals(session.mode)) {
-            return;
-        }
-        if (session.lastOutboundVideoFramesEncoded <= 0L) {
-            session.lastOutboundVideoBytes = bytesSent;
-            session.lastOutboundVideoFramesEncoded = framesEncoded;
-            session.lastOutboundVideoHugeFrames = hugeFramesSent;
-            return;
-        }
-        long now = System.currentTimeMillis();
-        if (now - session.lastOutboundVideoAdaptMs < 8000L) {
-            session.lastOutboundVideoBytes = bytesSent;
-            session.lastOutboundVideoFramesEncoded = framesEncoded;
-            session.lastOutboundVideoHugeFrames = hugeFramesSent;
-            return;
-        }
-        long deltaFrames = Math.max(0L, framesEncoded - session.lastOutboundVideoFramesEncoded);
-        long deltaHuge = Math.max(0L, hugeFramesSent - session.lastOutboundVideoHugeFrames);
-        boolean limited = qualityLimit != null && qualityLimit.length() > 0 && !"none".equalsIgnoreCase(qualityLimit);
-        boolean tooManyHugeFrames = deltaFrames >= 5L && deltaHuge * 3L >= deltaFrames;
-        if ((limited || tooManyHugeFrames) && deltaFrames > 0L) {
-            if (session.baseCaptureFps <= 0) {
-                session.baseCaptureFps = streamFps;
-            }
-            if (session.baseBitrateProfile == null || session.baseBitrateProfile.length() == 0) {
-                session.baseBitrateProfile = bitrateProfile;
-            }
-            if (session.videoAdaptLevel < 4) {
-                ++session.videoAdaptLevel;
-                session.stableVideoFeedbacks = 0;
-                session.lastVideoAdaptApplyMs = now;
-                session.lastOutboundVideoAdaptMs = now;
-                WebRtcClient.applyVideoAdaptation(session);
-                WebRtcClient.status("Android outbound video limited, adapt level " + session.videoAdaptLevel + " reason=" + qualityLimit);
-            }
-        }
-        session.lastOutboundVideoBytes = bytesSent;
-        session.lastOutboundVideoFramesEncoded = framesEncoded;
-        session.lastOutboundVideoHugeFrames = hugeFramesSent;
     }
     protected static void logInboundStats(PeerSession session, RTCStatsReport report) {
         if (report == null || report.getStatsMap() == null) {
             return;
         }
+        Map<String, String> codecById = codecMimeById(report);
         String video = "";
         String audio = "";
+        String inboundVideoCodec = "";
         long videoBytes = -1L;
         long videoPackets = -1L;
         long videoFramesDecoded = -1L;
@@ -251,7 +230,11 @@ extends WebRtcMediaOps {
             }
             String summary = "bytes=" + RtcStatsUtils.longMember(members, "bytesReceived") + " packets=" + RtcStatsUtils.longMember(members, "packetsReceived") + " lost=" + RtcStatsUtils.longMember(members, "packetsLost") + " framesDecoded=" + RtcStatsUtils.longMember(members, "framesDecoded") + " framesReceived=" + RtcStatsUtils.longMember(members, "framesReceived") + " keyFramesDecoded=" + RtcStatsUtils.longMember(members, "keyFramesDecoded") + " framesDropped=" + RtcStatsUtils.longMember(members, "framesDropped") + " decoder=" + RtcStatsUtils.stringMember(members, "decoderImplementation") + " pli=" + RtcStatsUtils.longMember(members, "pliCount") + " fir=" + RtcStatsUtils.longMember(members, "firCount") + " nack=" + RtcStatsUtils.longMember(members, "nackCount");
             if ("video".equals(kind)) {
-                video = summary;
+                String codecId = RtcStatsUtils.stringMember(members, "codecId");
+                if (codecId.length() > 0 && codecById.containsKey(codecId)) {
+                    inboundVideoCodec = codecById.get(codecId);
+                }
+                video = "codec=" + inboundVideoCodec + " " + summary;
                 videoBytes = RtcStatsUtils.longMember(members, "bytesReceived");
                 videoPackets = RtcStatsUtils.longMember(members, "packetsReceived");
                 videoFramesDecoded = RtcStatsUtils.longMember(members, "framesDecoded");
@@ -269,6 +252,10 @@ extends WebRtcMediaOps {
             audio = summary;
         }
         Log.i((String)TAG, (String)("RTC inbound stats video[" + video + "] audio[" + audio + "]"));
+        if (session != null && inboundVideoCodec.length() > 0 && !inboundVideoCodec.equals(session.negotiatedVideoCodec)) {
+            session.negotiatedVideoCodec = inboundVideoCodec;
+            WebRtcClient.status("Negotiated inbound video codec: " + inboundVideoCodec);
+        }
         if (videoBytes >= 0L && videoPackets >= 0L && videoFramesDecoded >= 0L) {
             WebRtcClient.handleInboundVideoStats(session, videoBytes, videoPackets, videoFramesDecoded, videoPacketsLost, videoFramesDropped, videoNackCount, videoPliCount, candidateRttMs, videoJitterMs);
         }
@@ -288,20 +275,8 @@ extends WebRtcMediaOps {
         if (receivingPackets) {
             session.lastInboundVideoPacketProgressMs = now;
         }
-        boolean recentPacketProgress = session.lastInboundVideoPacketProgressMs > 0L && now - session.lastInboundVideoPacketProgressMs < 9000L;
-        boolean bl = decodingFrames = framesDecoded > session.lastInboundVideoFramesDecoded;
-        WebRtcClient.maybeSendVideoAdaptFeedback(session, bytes, packets, framesDecoded, packetsLost, framesDropped, nackCount, pliCount, rttMs, jitterMs, receivingPackets, decodingFrames);
-        if (decodingFrames) {
-            session.stagnantInboundVideoPolls = 0;
-            session.keyframeRequestBackoffMs = KEYFRAME_REQUEST_MIN_INTERVAL_MS;
-        } else if (receivingPackets || recentPacketProgress) {
-            ++session.stagnantInboundVideoPolls;
-            if (session.stagnantInboundVideoPolls >= 2) {
-                WebRtcClient.recoverFrozenInboundVideo(session, receivingPackets || recentPacketProgress, framesDecoded);
-            }
-        } else {
-            session.stagnantInboundVideoPolls = 0;
-        }
+        decodingFrames = framesDecoded > session.lastInboundVideoFramesDecoded;
+        session.stagnantInboundVideoPolls = decodingFrames || !receivingPackets ? 0 : session.stagnantInboundVideoPolls + 1;
         WebRtcClient.rememberInboundVideoStats(session, bytes, packets, framesDecoded, packetsLost, framesDropped, nackCount, pliCount);
     }
     protected static void rememberInboundVideoStats(PeerSession session, long bytes, long packets, long framesDecoded, long packetsLost, long framesDropped, long nackCount, long pliCount) {
@@ -331,220 +306,4 @@ extends WebRtcMediaOps {
     protected static double ewmaStd(double variance) {
         return Math.sqrt(Math.max(0.0, variance));
     }
-    protected static void maybeSendVideoAdaptFeedback(PeerSession session, long bytes, long packets, long framesDecoded, long packetsLost, long framesDropped, long nackCount, long pliCount, long rttMs, long jitterMs, boolean receivingPackets, boolean decodingFrames) {
-        if (!DataChannelUtils.isOpen(session.inputChannel)) {
-            return;
-        }
-        long now = System.currentTimeMillis();
-        if (now - session.lastVideoAdaptFeedbackMs < VIDEO_ADAPT_FEEDBACK_MIN_INTERVAL_MS) {
-            return;
-        }
-        long deltaBytes = Math.max(0L, bytes - session.lastInboundVideoBytes);
-        long deltaPackets = Math.max(0L, packets - session.lastInboundVideoPackets);
-        long safePacketsLost = Math.max(0L, packetsLost);
-        long deltaLost = Math.max(0L, safePacketsLost - session.lastInboundVideoPacketsLost);
-        long deltaFramesDecoded = Math.max(0L, framesDecoded - session.lastInboundVideoFramesDecoded);
-        long safeFramesDropped = Math.max(0L, framesDropped);
-        long deltaFramesDropped = Math.max(0L, safeFramesDropped - session.lastInboundVideoFramesDropped);
-        long safeNackCount = Math.max(0L, nackCount);
-        long deltaNack = Math.max(0L, safeNackCount - session.lastInboundVideoNackCount);
-        long safePliCount = Math.max(0L, pliCount);
-        long deltaPli = Math.max(0L, safePliCount - session.lastInboundVideoPliCount);
-        boolean stalled = receivingPackets && !decodingFrames;
-        long statsSpanMs = session.lastInboundVideoStatsMs > 0L ? Math.max(1L, now - session.lastInboundVideoStatsMs) : 4000L;
-        long arrivalBitrateKbps = deltaBytes > 0L ? deltaBytes * 8L / statsSpanMs : 0L;
-        double lossRate = deltaLost > 0L || deltaPackets > 0L ? (double)deltaLost / (double)Math.max(1L, deltaPackets + deltaLost) : 0.0;
-        long decodeGap = decodingFrames && deltaFramesDecoded > 0L ? statsSpanMs / Math.max(1L, deltaFramesDecoded) : statsSpanMs;
-        double[] arrivalState = new double[]{session.inboundArrivalKbpsEwma, session.inboundArrivalKbpsVar};
-        double[] jitterState = new double[]{session.inboundJitterMsEwma, session.inboundJitterMsVar};
-        double[] lossState = new double[]{session.inboundLossRateEwma, session.inboundLossRateVar};
-        double[] decodeState = new double[]{session.inboundDecodeGapEwma, session.inboundDecodeGapVar};
-        WebRtcClient.updateEwma((double)Math.max(0L, arrivalBitrateKbps), arrivalState, 0.18);
-        WebRtcClient.updateEwma((double)Math.max(0L, jitterMs), jitterState, 0.18);
-        WebRtcClient.updateEwma(lossRate, lossState, 0.18);
-        WebRtcClient.updateEwma((double)Math.max(1L, decodeGap), decodeState, 0.18);
-        session.inboundArrivalKbpsEwma = arrivalState[0];
-        session.inboundArrivalKbpsVar = arrivalState[1];
-        session.inboundJitterMsEwma = jitterState[0];
-        session.inboundJitterMsVar = jitterState[1];
-        session.inboundLossRateEwma = lossState[0];
-        session.inboundLossRateVar = lossState[1];
-        session.inboundDecodeGapEwma = decodeState[0];
-        session.inboundDecodeGapVar = decodeState[1];
-        boolean dynamicLossCongested = lossRate > Math.max(0.06, session.inboundLossRateEwma + WebRtcClient.ewmaStd(session.inboundLossRateVar) * 2.5);
-        boolean dynamicJitterCongested = jitterMs > Math.max(180.0, session.inboundJitterMsEwma + WebRtcClient.ewmaStd(session.inboundJitterMsVar) * 2.5);
-        boolean dynamicArrivalStarved = deltaBytes > 0L && arrivalBitrateKbps > 0L && arrivalBitrateKbps < session.inboundArrivalKbpsEwma * 0.70;
-        boolean networkCongested = dynamicLossCongested || dynamicJitterCongested || dynamicArrivalStarved || deltaFramesDropped > 2L || deltaNack > 2L;
-        boolean decoderStalled = stalled && !networkCongested;
-        String feedbackType = networkCongested ? "network_congestion" : (decoderStalled ? "decoder_stall" : "stable");
-        boolean congested = networkCongested;
-        if (!congested && now - session.lastVideoAdaptFeedbackMs < VIDEO_ADAPT_FEEDBACK_MIN_INTERVAL_MS * 3L) {
-            return;
-        }
-        try {
-            JSONObject object = new JSONObject();
-            object.put("msgType", (Object)AiranConstants.TYPE_VIDEO_ADAPT_FEEDBACK);
-            object.put("sender", (Object)config.localId());
-            object.put("receiver", (Object)session.remoteId);
-            object.put("receiver_pwd", (Object)session.remotePwdMd5);
-            object.put("networkCongested", networkCongested);
-            object.put("decoderStalled", decoderStalled);
-            object.put("senderFault", false);
-            object.put("feedbackType", (Object)feedbackType);
-            object.put("receivingPackets", receivingPackets);
-            object.put("decodingFrames", decodingFrames);
-            object.put("deltaBytes", deltaBytes);
-            object.put("deltaPackets", deltaPackets);
-            object.put("deltaLost", deltaLost);
-            object.put("deltaFramesDecoded", deltaFramesDecoded);
-            object.put("deltaFramesDropped", deltaFramesDropped);
-            object.put("deltaNack", deltaNack);
-            object.put("deltaPli", deltaPli);
-            object.put("rttMs", Math.max(0L, rttMs));
-            object.put("jitterMs", Math.max(0L, jitterMs));
-            object.put("arrivalFrames", deltaFramesDecoded);
-            object.put("arrivalBytes", deltaBytes);
-            object.put("arrivalSpanMs", statsSpanMs);
-            object.put("arrivalBitrateKbps", arrivalBitrateKbps);
-            object.put("interArrivalAvgMs", decodeGap);
-            object.put("interArrivalJitterMs", Math.max(0L, jitterMs));
-            if (WebRtcClient.sendInput(session, object)) {
-                session.lastVideoAdaptFeedbackMs = now;
-            }
-        }
-        catch (Exception e) {
-            WebRtcClient.status("video adapt feedback failed: " + e.getMessage());
-        }
-    }
-    protected static void recoverFrozenInboundVideo(final PeerSession session, final boolean receivingPackets, final long framesDecoded) {
-        long now = System.currentTimeMillis();
-        if (now - session.lastVideoRecoveryMs < 10000L) {
-            return;
-        }
-        session.lastVideoRecoveryMs = now;
-        MAIN.post(new Runnable(){
-
-            @Override
-            public void run() {
-                WebRtcClient.status(receivingPackets ? "video decoder stalled at frame " + framesDecoded + ", requesting keyframe" : "video stream stalled at frame " + framesDecoded + ", requesting refresh");
-                WebRtcClient.requestKeyframe(session, receivingPackets ? "decoder-stalled" : "stream-stalled");
-                if (receivingPackets && renderer != null && session.remoteVideoTrack != null) {
-                    WebRtcClient.attachRemoteVideoToRenderer(session);
-                }
-            }
-        });
-    }
-    protected static void handleVideoAdaptFeedback(PeerSession session, JSONObject object) {
-        if (session == null || session.stopped || session.peer == null || !"cli".equals(session.role) || !"desktop".equals(session.mode)) {
-            return;
-        }
-        long now = System.currentTimeMillis();
-        boolean networkCongested = object.optBoolean("networkCongested", false);
-        boolean decoderStalled = object.optBoolean("decoderStalled", false);
-        boolean stalled = networkCongested || decoderStalled;
-        boolean senderFault = object.optBoolean("senderFault", false);
-        long deltaLost = Math.max(0L, object.optLong("deltaLost", 0L));
-        long deltaPackets = Math.max(0L, object.optLong("deltaPackets", 0L));
-        long deltaFramesDropped = Math.max(0L, object.optLong("deltaFramesDropped", 0L));
-        long deltaNack = Math.max(0L, object.optLong("deltaNack", 0L));
-        int arrivalBitrateKbps = Math.max(0, object.optInt("arrivalBitrateKbps", 0));
-        int interArrivalJitterMs = Math.max(object.optInt("jitterMs", 0), object.optInt("interArrivalJitterMs", 0));
-        int decodeQueue = Math.max(0, object.optInt("decodeQueue", 0));
-        int arrivalFrames = Math.max(0, object.optInt("arrivalFrames", 0));
-        int rttMs = Math.max(0, object.optInt("rttMs", 0));
-        double lossRate = deltaLost > 0L || deltaPackets > 0L ? (double)deltaLost / (double)Math.max(1L, deltaPackets + deltaLost) : 0.0;
-        double[] arrivalState = new double[]{session.feedbackArrivalKbpsEwma, session.feedbackArrivalKbpsVar};
-        double[] jitterState = new double[]{session.feedbackJitterMsEwma, session.feedbackJitterMsVar};
-        double[] queueState = new double[]{session.feedbackDecodeQueueEwma, session.feedbackDecodeQueueVar};
-        double[] lossState = new double[]{session.feedbackLossRateEwma, session.feedbackLossRateVar};
-        WebRtcClient.updateEwma((double)arrivalBitrateKbps, arrivalState, 0.18);
-        WebRtcClient.updateEwma((double)interArrivalJitterMs, jitterState, 0.18);
-        WebRtcClient.updateEwma((double)decodeQueue, queueState, 0.18);
-        WebRtcClient.updateEwma(lossRate, lossState, 0.18);
-        session.feedbackArrivalKbpsEwma = arrivalState[0];
-        session.feedbackArrivalKbpsVar = arrivalState[1];
-        session.feedbackJitterMsEwma = jitterState[0];
-        session.feedbackJitterMsVar = jitterState[1];
-        session.feedbackDecodeQueueEwma = queueState[0];
-        session.feedbackDecodeQueueVar = queueState[1];
-        session.feedbackLossRateEwma = lossState[0];
-        session.feedbackLossRateVar = lossState[1];
-        boolean dynamicArrivalStarved = arrivalFrames > 0 && arrivalBitrateKbps > 0 && arrivalBitrateKbps < session.feedbackArrivalKbpsEwma * 0.70;
-        boolean dynamicJitterCongested = interArrivalJitterMs > Math.max(180.0, session.feedbackJitterMsEwma + WebRtcClient.ewmaStd(session.feedbackJitterMsVar) * 2.5);
-        boolean dynamicQueueCongested = decodeQueue > Math.max(3.0, session.feedbackDecodeQueueEwma + WebRtcClient.ewmaStd(session.feedbackDecodeQueueVar) * 2.5);
-        boolean dynamicLossCongested = lossRate > Math.max(0.06, session.feedbackLossRateEwma + WebRtcClient.ewmaStd(session.feedbackLossRateVar) * 2.5);
-        boolean actualNetworkCongested = networkCongested || dynamicArrivalStarved || dynamicJitterCongested || dynamicQueueCongested || dynamicLossCongested;
-        boolean cleanDecoderStall = decoderStalled && !actualNetworkCongested && deltaLost == 0L && deltaFramesDropped == 0L && deltaNack == 0L && interArrivalJitterMs < 80 && (rttMs <= 0 || rttMs < 120);
-        if (senderFault || cleanDecoderStall) {
-            session.stableVideoFeedbacks = 0;
-            return;
-        }
-        if (session.baseCaptureFps <= 0) {
-            session.baseCaptureFps = streamFps;
-        }
-        if (session.baseBitrateProfile == null || session.baseBitrateProfile.length() == 0) {
-            session.baseBitrateProfile = bitrateProfile;
-        }
-        if (actualNetworkCongested) {
-            session.stableVideoFeedbacks = 0;
-            if (now - session.lastVideoAdaptApplyMs < 5000L && !stalled) {
-                return;
-            }
-            int nextLevel = Math.min(4, session.videoAdaptLevel + (stalled && networkCongested ? 2 : 1));
-            if (nextLevel != session.videoAdaptLevel) {
-                session.videoAdaptLevel = nextLevel;
-                session.lastVideoAdaptApplyMs = now;
-                WebRtcClient.applyVideoAdaptation(session);
-                WebRtcClient.status("video adapt level " + session.videoAdaptLevel + (stalled ? " stalled" : " congested"));
-            }
-            return;
-        }
-        if (session.videoAdaptLevel <= 0) {
-            return;
-        }
-        ++session.stableVideoFeedbacks;
-        if (session.stableVideoFeedbacks >= 2 && now - session.lastVideoAdaptApplyMs >= 8000L) {
-            --session.videoAdaptLevel;
-            session.stableVideoFeedbacks = 0;
-            session.lastVideoAdaptApplyMs = now;
-            WebRtcClient.applyVideoAdaptation(session);
-            WebRtcClient.status("video adapt recovered to level " + session.videoAdaptLevel);
-        }
-    }
-    protected static void applyVideoAdaptation(PeerSession session) {
-        if (session == null || session.stopped || session.peer == null) {
-            return;
-        }
-        String targetProfile = session.baseBitrateProfile == null || session.baseBitrateProfile.length() == 0 ? DEFAULT_BITRATE_PROFILE : session.baseBitrateProfile;
-        int targetFps = Math.max(5, Math.min(60, session.baseCaptureFps > 0 ? session.baseCaptureFps : streamFps));
-        if (session.videoAdaptLevel >= 1) {
-            targetProfile = "low";
-            targetFps = Math.max(16, targetFps * 4 / 5);
-        }
-        if (session.videoAdaptLevel >= 2) {
-            targetFps = Math.max(10, targetFps * 2 / 3);
-        }
-        if (session.videoAdaptLevel >= 3) {
-            targetFps = Math.max(8, targetFps / 2);
-        }
-        if (session.videoAdaptLevel >= 4) {
-            targetFps = 5;
-        }
-        boolean changed = false;
-        if (!targetProfile.equals(bitrateProfile)) {
-            bitrateProfile = targetProfile;
-            changed = true;
-        }
-        if (targetFps != streamFps || targetFps != session.captureFps) {
-            streamFps = targetFps;
-            session.captureFps = targetFps;
-            changed = true;
-        }
-        if (!changed) {
-            return;
-        }
-        WebRtcClient.applyVideoSenderParameters(session);
-        WebRtcClient.sendStreamConfig(session);
-    }
-
 }

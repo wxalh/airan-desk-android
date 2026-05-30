@@ -15,8 +15,8 @@ final class StreamConfigPolicy {
         return fallback;
     }
 
-    static String summary(String bitrateProfile, int streamWidth, int streamHeight, int streamFps, String captureBackend, String networkPath) {
+    static String summary(int streamWidth, int streamHeight, int streamFps, String networkPath) {
         String resolution = streamWidth > 0 && streamHeight > 0 ? streamWidth + "x" + streamHeight : "original";
-        return bitrateProfile + " " + resolution + "@" + streamFps + " capture=" + captureBackend + " network=" + networkPath;
+        return "auto " + resolution + "@" + streamFps + " network=" + networkPath;
     }
 }

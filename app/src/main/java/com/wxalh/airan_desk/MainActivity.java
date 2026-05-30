@@ -125,6 +125,7 @@ extends AiranDeskCallbacksActivity {
         this.loadTransferHistory();
         WebRtcClient.init((Context)this);
         WebRtcClient.setUiEvents(this);
+        WebRtcClient.setUiVisible(true);
         SignalingClient.setListener(this);
         this.buildUi();
         this.requestNotificationPermissionIfNeeded();
@@ -136,6 +137,7 @@ extends AiranDeskCallbacksActivity {
     }
     protected void onResume() {
         super.onResume();
+        WebRtcClient.setUiVisible(true);
         this.recoverStaleScreenCapturePermissionRequest();
         if (!SignalingClient.isConnected() && !SignalingClient.isConnecting()) {
             this.autoConnectWebSocket();
@@ -154,6 +156,7 @@ extends AiranDeskCallbacksActivity {
     }
     protected void onPause() {
         this.syncNetworkConfigFromEditors();
+        WebRtcClient.setUiVisible(false);
         super.onPause();
     }
     protected void onDestroy() {

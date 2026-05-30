@@ -85,8 +85,12 @@ extends WebRtcPeerOps {
                 if (session.stopped || session.peer == null) {
                     return;
                 }
-                final SessionDescription offer = WebRtcClient.forceH264OnlyDescription(desc, "local offer");
+                final SessionDescription offer = desc;
                 WebRtcClient.logSdpSummary("local " + offer.type.canonicalForm(), offer.description);
+                session.localOfferFirstVideoCodec = SdpSummaryLogger.firstVideoCodec(offer.description);
+                if (session.localOfferFirstVideoCodec.length() > 0) {
+                    WebRtcClient.status("Local offer first video codec candidate: " + session.localOfferFirstVideoCodec);
+                }
                 session.peer.setLocalDescription((SdpObserver)new LoggingSdpObserver(){
 
                     @Override
@@ -115,8 +119,13 @@ extends WebRtcPeerOps {
                         WebRtcClient.status("Cannot set local answer: peer is null");
                         return;
                     }
-                    final SessionDescription answer = WebRtcClient.forceH264OnlyDescription(desc, "local answer");
+                    final SessionDescription answer = desc;
                     WebRtcClient.logSdpSummary("local " + answer.type.canonicalForm(), answer.description);
+                    session.localAnswerVideoCodec = SdpSummaryLogger.firstVideoCodec(answer.description);
+                    if (session.localAnswerVideoCodec.length() > 0) {
+                        session.negotiatedVideoCodec = session.localAnswerVideoCodec;
+                        WebRtcClient.status("Local answer selected video codec: " + session.localAnswerVideoCodec);
+                    }
                     session.peer.setLocalDescription((SdpObserver)new LoggingSdpObserver(){
 
                         @Override
@@ -197,14 +206,19 @@ extends WebRtcPeerOps {
                 WebRtcClient.status("Remote SDP offer ignored in state " + signalingState);
                 return;
             }
-            String remoteSdp = SdpH264Patcher.forceH264Only(sdp, "remote " + type, new SdpH264Patcher.Listener(){
-
-                @Override
-                public void onPatched(String patchedLabel) {
-                    WebRtcClient.status("Android H264-only SDP patch applied: " + patchedLabel);
-                }
-            }, false);
+            String remoteSdp = sdp;
             WebRtcClient.logSdpSummary("remote " + type, remoteSdp);
+            String firstRemoteVideoCodec = SdpSummaryLogger.firstVideoCodec(remoteSdp);
+            if (descType == SessionDescription.Type.OFFER) {
+                session.remoteOfferFirstVideoCodec = firstRemoteVideoCodec;
+                if (firstRemoteVideoCodec.length() > 0) {
+                    WebRtcClient.status("Remote offer first video codec candidate: " + firstRemoteVideoCodec);
+                }
+            } else if (firstRemoteVideoCodec.length() > 0) {
+                session.remoteAnswerVideoCodec = firstRemoteVideoCodec;
+                session.negotiatedVideoCodec = firstRemoteVideoCodec;
+                WebRtcClient.status("Remote answer selected video codec: " + firstRemoteVideoCodec);
+            }
             session.lastRemoteDescriptionType = type;
             session.lastRemoteDescriptionSdp = sdp;
             session.peer.setRemoteDescription((SdpObserver)new LoggingSdpObserver(){
@@ -242,19 +256,6 @@ extends WebRtcPeerOps {
     protected static void logSdpSummary(String label, String sdp) {
         SdpSummaryLogger.log(TAG, label, sdp);
     }
-    protected static SessionDescription forceH264OnlyDescription(SessionDescription desc, String label) {
-        if (desc == null) {
-            return null;
-        }
-        String patched = SdpH264Patcher.forceH264Only(desc.description, label, new SdpH264Patcher.Listener(){
-
-            @Override
-            public void onPatched(String patchedLabel) {
-                WebRtcClient.status("Android H264-only SDP patch applied: " + patchedLabel);
-            }
-        });
-        return patched.equals(desc.description) ? desc : new SessionDescription(desc.type, patched);
-    }
     protected static void addRemoteCandidate(PeerSession session, JSONObject object) throws Exception {
         if (session.peer == null) {
             WebRtcClient.status("Ignore ICE candidate: peer is null");
@@ -290,9 +291,7 @@ extends WebRtcPeerOps {
             object.put("is_only_file", !"desktop".equals(connectMode));
             object.put("width", -1);
             object.put("height", -1);
-            object.put("bitrateProfile", (Object)bitrateProfile);
             object.put("networkPath", (Object)networkPath);
-            object.put("captureBackend", (Object)captureBackend);
             object.put(AiranConstants.KEY_AUDIO_MODE, (Object)audioMode);
             object.put("fps", streamFps);
             boolean sent = SignalingClient.sendText(object.toString());
@@ -339,11 +338,42 @@ extends WebRtcPeerOps {
             object.put("receiver", (Object)session.remoteId);
             object.put("sender", (Object)config.localId());
             object.put("data", (Object)desc.description);
+            object.put(AiranConstants.KEY_VIDEO_CODEC_CAPABILITIES, (Object)WebRtcClient.buildLocalVideoCodecCapabilities());
             boolean sent = SignalingClient.sendText(object.toString());
             WebRtcClient.status(sent ? "SDP " + type + " sent" : "WebSocket is not connected; SDP was not sent");
         }
         catch (Exception e) {
             WebRtcClient.status("send sdp failed: " + e.getMessage());
+        }
+    }
+
+    protected static JSONArray buildLocalVideoCodecCapabilities() {
+        JSONArray array = new JSONArray();
+        addVideoCodecCapability(array, "H264", "Android MediaCodec", true, true, true, "mediacodec-surface", "Android hardware-first stable desktop codec");
+        addVideoCodecCapability(array, "VP8", "Android WebRTC", true, true, false, "", "Android WebRTC fallback");
+        return array;
+    }
+
+    private static void addVideoCodecCapability(JSONArray array,
+                                                String codec,
+                                                String backend,
+                                                boolean canEncode,
+                                                boolean canDecode,
+                                                boolean hardware,
+                                                String zeroCopy,
+                                                String notes) {
+        try {
+            JSONObject item = new JSONObject();
+            item.put(AiranConstants.KEY_CODEC, (Object)codec);
+            item.put(AiranConstants.KEY_BACKEND, (Object)backend);
+            item.put(AiranConstants.KEY_CAN_ENCODE, canEncode);
+            item.put(AiranConstants.KEY_CAN_DECODE, canDecode);
+            item.put(AiranConstants.KEY_HARDWARE, hardware);
+            item.put(AiranConstants.KEY_ZERO_COPY, (Object)zeroCopy);
+            item.put(AiranConstants.KEY_NOTES, (Object)notes);
+            array.put((Object)item);
+        }
+        catch (Exception ignored) {
         }
     }
     protected static void sendCandidate(PeerSession session, IceCandidate candidate) {

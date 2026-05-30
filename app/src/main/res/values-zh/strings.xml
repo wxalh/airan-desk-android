@@ -243,4 +243,8 @@
     <string name="input_service_already_enabled_message">输入服务已开启，远程点击、返回、主页和键盘操作可以生效。</string>
     <string name="audio_permission_already_granted_message">麦克风权限已授权。</string>
     <string name="runtime_diagnostics">运行时诊断</string>
+    <string name="allow">允许</string>
+    <string name="reject">拒绝</string>
+    <string name="remote_audio_request_title">远程音频请求</string>
+    <string name="remote_audio_request_message">控制端请求开启“%1$s”音频，是否允许？</string>
 </resources>
